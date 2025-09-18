@@ -1,0 +1,8 @@
+venv/
+src/__pycache__/
+yolov8n.pt
+dataset/
+results/
+*.mp4
+*.jpg
+*.png
