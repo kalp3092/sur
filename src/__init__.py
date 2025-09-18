@@ -1,0 +1,1 @@
+"""Shoplifting detection MVP package."""

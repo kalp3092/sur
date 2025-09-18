@@ -1,0 +1,28 @@
+# Core ML
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# UI
+streamlit
+
+# Video I/O and processing
+opencv-python>=4.7.0
+numpy>=1.24.0
+
+# Web/API
+fastapi>=0.95.0
+uvicorn[standard]>=0.22.0
+websockets>=11.0.0
+aiofiles>=23.1.0
+
+# Config & utils
+pydantic>=1.10.12
+loguru>=0.7.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Optional (for RTSP & streaming helpers)
+ffmpeg-python>=0.2.0
