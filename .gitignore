@@ -10,3 +10,4 @@ results/
 __pycache__/
 __init__.py
 /logs/
+.env
