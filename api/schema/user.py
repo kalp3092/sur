@@ -14,6 +14,7 @@ class UserRead(BaseModel):
     full_name: Optional[str] = None
     disabled: bool = False
     created_at: Optional[str] = None
+    chat_id: Optional[int] = None
 
     class Config:
         orm_mode = True
@@ -23,3 +24,4 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     full_name: Optional[str] = None
     disabled: Optional[bool] = None
+    chat_id: Optional[int] = None

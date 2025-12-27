@@ -77,3 +77,18 @@ def delete_user(user_id: int) -> bool:
         return r > 0
     finally:
         db.close()
+
+
+def set_user_chat_id(user_id: int, chat_id: str) -> Optional[UserRead]:
+    db: Session = SessionLocal()
+    try:
+        u = db.query(User).filter(User.id == user_id).first()
+        if not u:
+            return None
+        u.chat_id = str(chat_id)
+        db.add(u)
+        db.commit()
+        db.refresh(u)
+        return UserRead.from_orm(u)
+    finally:
+        db.close()

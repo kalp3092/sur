@@ -26,6 +26,8 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     disabled = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Telegram chat id saved when user links their bot chat
+    chat_id = Column(String, nullable=True, index=True)
 
 
 def init_db() -> None:
