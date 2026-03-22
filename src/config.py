@@ -21,7 +21,7 @@ try:
         video_source: str = Field("0", description="Video capture source")
 
         # YOLO model path or name (ultralytics)
-        yolo_model: str = Field("shoplifting_weights.pt", description="YOLOv8 model path or name")
+        yolo_model: str = Field("best.pt", description="YOLOv8 model path or name")
 
         # Behavior model path
         behavior_model_path: Optional[str] = Field(None, description="Path to 3D CNN weights")
