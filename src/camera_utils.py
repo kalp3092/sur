@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any, Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, unquote
 import cv2
 import time
 import logging
@@ -35,6 +35,10 @@ def build_url_with_credentials(url: str, username: Optional[str], password: Opti
     if not url:
         logger.debug("build_url_with_credentials: empty url")
         return url
+
+    # Decode percent-encoded characters (e.g. %40 -> @) so urlsplit can
+    # correctly identify embedded credentials in the netloc.
+    url = unquote(url)
 
     parts = urlsplit(url)
     scheme, netloc, path, query, _fragment = parts

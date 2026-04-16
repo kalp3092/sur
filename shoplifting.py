@@ -384,16 +384,10 @@ else:
     # Live Feed UI
     st.header("Live Feed")
     live_choice = st.radio("Live source", ["Local camera (attached)", "Remote camera (URL)"])
-    col1, col2 = st.columns(2)
-    with col1:
-        pre_seconds = st.number_input("Pre-roll seconds", min_value=0.0, max_value=10.0, value=2.0, step=0.5)
-    with col2:
-        post_seconds = st.number_input("Post-roll seconds", min_value=1.0, max_value=20.0, value=3.0, step=0.5)
 
     if live_choice == "Local camera (attached)":
         cam_index = st.number_input("Webcam index", min_value=0, max_value=10, value=0, step=1)
         source_val = int(cam_index)
-        cam_name = st.text_input("Camera name (unique)", value=f"webcam_{cam_index}")
     else:
         cam_url = st.text_input("Remote camera URL (rtsp:// or http:// ...)")
         colu, colp = st.columns(2)
@@ -425,65 +419,171 @@ else:
             if ok:
                 st.success(f"Connected. FPS ~ {fps or 'n/a'}, size: {size or 'n/a'}")
                 if jpeg_bytes:
-                    st.image(jpeg_bytes, caption="Test frame", use_column_width=True)
+                    st.image(jpeg_bytes, caption="Test frame", use_container_width=True)
             else:
                 st.error(f"Test failed: {err}")
 
         source_val = final_url
-        cam_name = st.text_input("Camera name (unique)", value=(cam_user or "remote_cam"))
 
-    start_btn = st.button("Start")
-    stop_btn = st.button("Stop")
+    # --- Session state for live streaming ---
+    if 'live_streaming' not in st.session_state:
+        st.session_state.live_streaming = False
+    if 'detection_enabled' not in st.session_state:
+        st.session_state.detection_enabled = False
 
-    if start_btn:
-        # Auto-generate camera name when not provided by user
-        if not cam_name:
+    st.divider()
+
+    # Control buttons in columns
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    with btn_col1:
+        if st.button("▶️ Start Live Feed", type="primary", use_container_width=True):
+            st.session_state.live_streaming = True
+            st.session_state.detection_enabled = False
+    with btn_col2:
+        if st.button("🔍 Start Detection", type="secondary", use_container_width=True):
+            st.session_state.live_streaming = True
+            st.session_state.detection_enabled = True
+    with btn_col3:
+        if st.button("⏹️ Stop", type="secondary", use_container_width=True):
+            st.session_state.live_streaming = False
+            st.session_state.detection_enabled = False
+
+    # Status indicator
+    if st.session_state.live_streaming:
+        if st.session_state.detection_enabled:
+            st.success("🟢 Live stream + Shoplifting Detection ACTIVE")
+        else:
+            st.info("🟢 Live stream active (detection OFF — click 'Start Detection' to enable)")
+    else:
+        st.warning("⏸️ Stream stopped")
+
+    # Alert placeholder (shows above the video)
+    alert_placeholder = st.empty()
+
+    # Live video placeholder
+    frame_placeholder = st.empty()
+
+    # FPS / stats display
+    stats_placeholder = st.empty()
+
+    if st.session_state.live_streaming:
+        # Open the camera
+        os.environ.setdefault(
+            "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+            "rtsp_transport;tcp|max_delay;5000000|stimeout;30000000",
+        )
+
+        cap = None
+        # Try RTSP variants if it's a string URL
+        if isinstance(source_val, str):
+            candidates = _generate_rtsp_variants(source_val)
+        else:
+            candidates = [source_val]
+
+        for cand in candidates:
             try:
-                from urllib.parse import urlsplit
-
-                parts = urlsplit(str(source_val))
-                host = parts.hostname or parts.path or f"remote_cam_{len(st.session_state.live_threads) + 1}"
-                cam_name = host.replace(".", "_").replace(":", "_")
+                c = cv2.VideoCapture(cand, cv2.CAP_FFMPEG) if isinstance(cand, str) else cv2.VideoCapture(cand)
+                try:
+                    c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+                if c.isOpened():
+                    cap = c
+                    logger.info("Live feed: opened source: %s", cand if isinstance(cand, int) else "[url]")
+                    break
+                else:
+                    try:
+                        c.release()
+                    except Exception:
+                        pass
             except Exception:
-                cam_name = f"remote_cam_{len(st.session_state.live_threads) + 1}"
+                pass
 
-        # reset stop flag and spawn thread
-        st.session_state.live_stops[cam_name] = False
-        if cam_name in st.session_state.live_threads and st.session_state.live_threads[cam_name].is_alive():
-            st.info("Camera already running")
-            logger.info("UI: start requested but already running name=%s", cam_name)
+        if cap is None or not cap.isOpened():
+            st.error("❌ Failed to open camera. Check your URL/index and network.")
+            logger.error("Live feed: failed to open source: %s", str(source_val))
+            st.session_state.live_streaming = False
         else:
-            t = threading.Thread(target=cam_worker, args=(source_val, cam_name, pre_seconds, post_seconds), daemon=True)
-            st.session_state.live_threads[cam_name] = t
-            t.start()
-            logger.info("UI: started camera worker name=%s", cam_name)
-            st.success(f"Started camera worker: {cam_name}")
+            fps_cam = cap.get(cv2.CAP_PROP_FPS)
+            if not fps_cam or fps_cam <= 0 or fps_cam > 120:
+                fps_cam = 15.0
 
-    if stop_btn:
-        if cam_name in st.session_state.live_threads:
-            st.session_state.live_stops[cam_name] = True
-            logger.info("UI: stopping camera worker name=%s", cam_name)
-            st.success(f"Stopping camera worker: {cam_name}")
-        else:
-            st.info("No worker found for that name")
-            logger.info("UI: stop requested but no worker found name=%s", cam_name)
+            frame_count = 0
+            shoplifting_alert_active = False
+            last_alert_frame_bytes = None
 
-    # Display live previews for all running cameras
-    st.subheader("Live previews")
-    for name, val in list(st.session_state.live_latest.items()):
-        st.markdown(f"### {name}")
-        ts, jpeg_bytes = val
-        if ts == "__error__":
-            st.error("Failed to open camera (check URL/index and network)")
-            continue
-        if jpeg_bytes:
-            st.image(jpeg_bytes, channels="RGB", use_column_width=True, caption=f"Last frame: {datetime.fromtimestamp(ts).isoformat()}")
-        else:
-            st.info("Waiting for frames...")
+            try:
+                while st.session_state.live_streaming:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        # Try a few more times before giving up
+                        time.sleep(0.1)
+                        ret, frame = cap.read()
+                        if not ret or frame is None:
+                            frame_placeholder.warning("📡 Lost connection to camera, retrying...")
+                            time.sleep(1.0)
+                            continue
 
-        # show alert status and allow downloading the last alert frame
-        if st.session_state.live_any_alert.get(name, False) and st.session_state.live_last_alert_bytes.get(name):
-            st.error("Shoplifting detected!")
-            st.download_button("Download last detected frame", st.session_state.live_last_alert_bytes[name], file_name=f"{name}_last_alert.jpg", mime="image/jpeg")
-        else:
-            st.success("Nobody stole anything")
+                    frame_count += 1
+                    t_start = time.time()
+
+                    display_frame = frame
+
+                    if st.session_state.detection_enabled:
+                        # Run YOLO detection
+                        try:
+                            dets = detector.detect(frame)
+                        except Exception as e:
+                            logger.exception("Live feed: detection error: %s", e)
+                            dets = []
+
+                        display_frame = draw_boxes(frame, dets)
+
+                        # Check for shoplifting
+                        found_shoplifting = False
+                        for d in dets:
+                            if is_shoplifting_detection(d):
+                                found_shoplifting = True
+                                break
+
+                        if found_shoplifting:
+                            shoplifting_alert_active = True
+                            alert_placeholder.error("🚨 **SHOPLIFTING DETECTED!** 🚨")
+                            # Save alert frame
+                            try:
+                                ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                fname = alerts_dir / f"live_alert_{ts}.jpg"
+                                ok_enc, buf = cv2.imencode('.jpg', display_frame)
+                                if ok_enc:
+                                    with open(fname, 'wb') as f:
+                                        f.write(buf.tobytes())
+                                    last_alert_frame_bytes = buf.tobytes()
+                                    logger.info("Live feed: saved alert frame %s", str(fname))
+                            except Exception as e:
+                                logger.exception("Live feed: failed to save alert: %s", e)
+                        else:
+                            if shoplifting_alert_active:
+                                alert_placeholder.warning("⚠️ Shoplifting was detected earlier — monitoring...")
+                            else:
+                                alert_placeholder.empty()
+                    else:
+                        alert_placeholder.empty()
+
+                    # Convert BGR -> RGB for Streamlit display
+                    display_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                    frame_placeholder.image(display_rgb, caption="Live Feed", use_container_width=True)
+
+                    t_elapsed = time.time() - t_start
+                    actual_fps = 1.0 / t_elapsed if t_elapsed > 0 else 0
+                    det_status = "🔍 Detection ON" if st.session_state.detection_enabled else "Detection OFF"
+                    stats_placeholder.caption(
+                        f"📊 {det_status} | Processing: {actual_fps:.1f} FPS | "
+                        f"Frame #{frame_count} | Inference: {t_elapsed*1000:.0f}ms"
+                    )
+
+            except Exception as e:
+                logger.exception("Live feed: error: %s", e)
+                st.error(f"Stream error: {e}")
+            finally:
+                cap.release()
+                logger.info("Live feed: camera released")
