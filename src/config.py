@@ -28,7 +28,7 @@ try:
 
         # Confidence thresholds
         detection_confidence: float = Field(0.4, ge=0.0, le=1.0)
-        alert_confidence: float = Field(0.7, ge=0.0, le=1.0)
+        alert_confidence: float = Field(0.8, ge=0.0, le=1.0)
 
         # Clip parameters for 3D CNN
         clip_len: int = Field(16, description="Number of frames per clip for behavior analysis")
@@ -55,7 +55,7 @@ except Exception:
         yolo_model: str = os.getenv("SD_YOLO_MODEL", "yolov8n.pt")
         behavior_model_path: Optional[str] = os.getenv("SD_BEHAVIOR_MODEL_PATH")
         detection_confidence: float = float(os.getenv("SD_DETECTION_CONFIDENCE", "0.4"))
-        alert_confidence: float = float(os.getenv("SD_ALERT_CONFIDENCE", "0.7"))
+        alert_confidence: float = float(os.getenv("SD_ALERT_CONFIDENCE", "0.8"))
         clip_len: int = int(os.getenv("SD_CLIP_LEN", "16"))
         clip_fps: int = int(os.getenv("SD_CLIP_FPS", "8"))
         host: str = os.getenv("SD_HOST", "0.0.0.0")
