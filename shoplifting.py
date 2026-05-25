@@ -266,120 +266,165 @@ def draw_boxes(img: np.ndarray, detections):
     return out
 
 if mode == "Video":
-    st.header("Batch Image Detection")
-    image_files = st.file_uploader("Upload one or more images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-    if image_files:
-        for uploaded_file in image_files:
-            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-            img = cv2.imdecode(file_bytes, 1)
-            if img is not None:
-                dets = detector.detect(img)
-                st.write(f"{uploaded_file.name}: {len(dets)} detections")
-                # Check for shoplifting using configured confidence threshold
-                found_shoplifting = False
+    st.header("Video Detection")
+
+    # ── Session-state keys for video processing ──────────────────────────────
+    # We cache all results so that clicking buttons (download, etc.) does NOT
+    # re-trigger processing.  Processing only runs when a NEW file is uploaded
+    # (detected by comparing the file name + size fingerprint).
+    for _k in (
+        'video_processed',       # bool – processing finished
+        'video_fingerprint',     # str  – "<name>_<size>" of last processed file
+        'video_found_shoplifting',
+        'video_annotated_bytes', # bytes – final annotated mp4
+        'video_total_frames',
+        'video_shoplifting_frame_bytes',  # bytes – first shoplifting JPEG
+    ):
+        if _k not in st.session_state:
+            st.session_state[_k] = None
+
+    video_file = st.file_uploader("Upload a video", type=["mp4", "avi", "mov", "mkv"])
+
+    if video_file:
+        fingerprint = f"{video_file.name}_{video_file.size}"
+
+        # ── Only process when a new file is uploaded ──────────────────────────
+        if st.session_state.video_fingerprint != fingerprint:
+            # Reset state for the new file
+            st.session_state.video_processed = False
+            st.session_state.video_fingerprint = fingerprint
+            st.session_state.video_found_shoplifting = False
+            st.session_state.video_annotated_bytes = None
+            st.session_state.video_total_frames = 0
+            st.session_state.video_shoplifting_frame_bytes = None
+
+            # Write upload to a temp file
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            tfile.write(video_file.read())
+            tfile.close()
+
+            cap = cv2.VideoCapture(tfile.name)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out_path = tempfile.mktemp(suffix='.mp4')
+            writer = cv2.VideoWriter(out_path, fourcc, float(fps), (w, h))
+
+            # ── UI placeholders (live update during processing) ───────────────
+            st.markdown("### Processing — live preview")
+            progress_text = st.empty()
+            progress_bar  = st.progress(0)
+            alert_banner  = st.empty()
+
+            col_orig, col_ann = st.columns(2)
+            with col_orig:
+                st.caption("Original")
+                orig_placeholder = st.empty()
+            with col_ann:
+                st.caption("Annotated")
+                ann_placeholder  = st.empty()
+
+            idx = 0
+            found_shoplifting = False
+            first_shoplifting_frame_bytes = None
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                dets = detector.detect(frame)
+
+                shoplifting_in_this_frame = False
                 for d in dets:
-                    st.write(f"bbox={d.xyxy} conf={d.conf:.3f} cls={d.cls}")
                     if is_shoplifting_detection(d):
                         found_shoplifting = True
-                        break
-                out = draw_boxes(img, dets)
-                st.image(out, channels="BGR", caption=f"{uploaded_file.name} - Detection Result")
-                if found_shoplifting:
-                    st.error("Shoplifting detected!")
-                    # Offer download of the annotated frame for this image
-                    ok, buf = cv2.imencode('.jpg', out)
-                    if ok:
-                        st.download_button(
-                            label="Download detected frame",
-                            data=buf.tobytes(),
-                            file_name=f"{Path(uploaded_file.name).stem}_shoplifting.jpg",
-                            mime="image/jpeg",
-                        )
-                        # Persist annotated image to alerts dir
-                        try:
-                            tsf = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-                            img_fname = alerts_dir / f"image_{Path(uploaded_file.name).stem}_alert_{tsf}.jpg"
-                            with open(img_fname, 'wb') as _f:
-                                _f.write(buf.tobytes())
-                            st.info(f"Saved alert image: {img_fname}")
-                        except Exception as _e:
-                            st.warning(f"Failed to save alert image: {_e}")
-            else:
-                st.error(f"Failed to read {uploaded_file.name}")
+                        shoplifting_in_this_frame = True
 
-    st.header("Video Detection")
-    video_file = st.file_uploader("Upload a video", type=["mp4", "avi", "mov", "mkv"]) 
-    if video_file:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(video_file.read())
-        tfile.close()
-        cap = cv2.VideoCapture(tfile.name)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out_path = tempfile.mktemp(suffix='.mp4')
-        writer = cv2.VideoWriter(out_path, fourcc, float(fps), (w, h))
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        st.write(f"Processing...")
-        progress = st.progress(0)
-        idx = 0
-        found_shoplifting = False
-        shoplifting_frames = []  # Store (frame_idx, frame) where shoplifting detected
-        shoplifting_images = []  # For thumbnails
-        first_detected_frame = None
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            dets = detector.detect(frame)
-            shoplifting_in_this_frame = False
-            for d in dets:
-                if is_shoplifting_detection(d):
-                    found_shoplifting = True
-                    shoplifting_in_this_frame = True
-            out_frame = draw_boxes(frame, dets)
-            writer.write(out_frame)
-            if shoplifting_in_this_frame:
-                # Save frame for thumbnails and video
-                shoplifting_frames.append(out_frame.copy())
-                if first_detected_frame is None:
-                    first_detected_frame = out_frame.copy()
-                # Persist this detected frame as JPEG
-                try:
-                    tsf = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-                    frame_fname = alerts_dir / f"video_{Path(tfile.name).stem}_frame_{idx}_alert_{tsf}.jpg"
-                    okf, buff = cv2.imencode('.jpg', out_frame)
-                    if okf:
-                        with open(frame_fname, 'wb') as _ff:
-                            _ff.write(buff.tobytes())
-                except Exception as _e:
-                    print(f"Failed to save detected video frame: {_e}")
-                # For thumbnails, resize to width 256 for display
-                thumb = cv2.resize(out_frame, (256, int(256 * h / w))) if w > 0 else out_frame
-                shoplifting_images.append(thumb)
-            idx += 1
-            if frame_count > 0:
-                progress.progress(min(idx / frame_count, 1.0))
-        cap.release()
-        writer.release()
-        if found_shoplifting:
-            st.error("Shoplifting detected in video!")
-            # Offer download of the first detected frame as a JPEG
-            if first_detected_frame is not None:
-                ok, buf = cv2.imencode('.jpg', first_detected_frame)
-                if ok:
+                out_frame = draw_boxes(frame, dets)
+                writer.write(out_frame)
+
+                # ── Live side-by-side preview ─────────────────────────────────
+                orig_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                ann_rgb  = cv2.cvtColor(out_frame, cv2.COLOR_BGR2RGB)
+                orig_placeholder.image(orig_rgb, use_container_width=True)
+                ann_placeholder.image(ann_rgb,  use_container_width=True)
+
+                if shoplifting_in_this_frame:
+                    alert_banner.error("🚨 **SHOPLIFTING DETECTED!** 🚨")
+                    # Capture first shoplifting frame for download
+                    if first_shoplifting_frame_bytes is None:
+                        okf, buff = cv2.imencode('.jpg', out_frame)
+                        if okf:
+                            first_shoplifting_frame_bytes = buff.tobytes()
+                    # Persist alert JPEG
+                    try:
+                        tsf = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+                        frame_fname = alerts_dir / f"video_{Path(tfile.name).stem}_frame_{idx}_alert_{tsf}.jpg"
+                        okf2, buff2 = cv2.imencode('.jpg', out_frame)
+                        if okf2:
+                            with open(frame_fname, 'wb') as _ff:
+                                _ff.write(buff2.tobytes())
+                    except Exception as _e:
+                        logger.warning("Failed to save detected video frame: %s", _e)
+                elif found_shoplifting:
+                    # Keep the banner visible after the first detection
+                    alert_banner.warning("⚠️ Shoplifting was detected earlier — monitoring...")
+
+                idx += 1
+                pct = min(idx / frame_count, 1.0) if frame_count > 0 else 0
+                progress_bar.progress(pct)
+                progress_text.caption(f"Processing frame {idx}{f' / {frame_count}' if frame_count > 0 else ''} — {pct*100:.1f}%")
+
+            cap.release()
+            writer.release()
+
+            # Read annotated video bytes into memory so we can offer download
+            # without touching the filesystem again after cleanup
+            with open(out_path, 'rb') as _vf:
+                annotated_bytes = _vf.read()
+
+            os.remove(out_path)
+            os.remove(tfile.name)
+
+            # ── Persist results in session state ─────────────────────────────
+            st.session_state.video_processed           = True
+            st.session_state.video_found_shoplifting   = found_shoplifting
+            st.session_state.video_annotated_bytes     = annotated_bytes
+            st.session_state.video_total_frames        = idx
+            st.session_state.video_shoplifting_frame_bytes = first_shoplifting_frame_bytes
+
+            progress_text.caption(f"✅ Done — processed {idx} frames.")
+
+        # ── Results section (shown after processing, survives button clicks) ──
+        if st.session_state.video_processed:
+            st.divider()
+            st.markdown("### Results")
+
+            if st.session_state.video_found_shoplifting:
+                st.error("🚨 Shoplifting detected in video!")
+            else:
+                st.success("✅ No shoplifting detected.")
+
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    label="⬇️ Download Annotated Video",
+                    data=st.session_state.video_annotated_bytes,
+                    file_name="annotated_video.mp4",
+                    mime="video/mp4",
+                )
+            with dl_col2:
+                if st.session_state.video_shoplifting_frame_bytes:
                     st.download_button(
-                        label="Download first detected frame",
-                        data=buf.tobytes(),
+                        label="⬇️ Download First Shoplifting Frame",
+                        data=st.session_state.video_shoplifting_frame_bytes,
                         file_name="shoplifting_first_frame.jpg",
                         mime="image/jpeg",
                     )
-        st.success(f"Processed {idx} frames. Download result below.")
-        with open(out_path, "rb") as f:
-            st.download_button("Download Annotated Video", f, file_name="annotated_video.mp4")
-        os.remove(out_path)
-        os.remove(tfile.name)
 else:
     # Live Feed UI
     st.header("Live Feed")
